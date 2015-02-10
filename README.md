@@ -41,5 +41,5 @@ cooker cook <image_identifier>
 
 At the end of this command and if the build process went fine, the command will return you the AMI-id of the image.
 
-Note: <image_identifier> is the one of the lines returned by the "cooker list" command.
+Note: image_identifier is the one of the lines returned by the "cooker list" command.
 
