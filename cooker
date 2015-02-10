@@ -1,0 +1,164 @@
+#!/bin/bash
+
+# Copyright (c) 2015, Outscale SAS
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without modification, 
+# are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, 
+# this list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice, 
+# this list of conditions and the following disclaimer in the documentation and/or 
+# other materials provided with the distribution.
+#
+#THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+function usage() {
+  echo -e "Usage: $0 <command>\n"
+  echo "commands:"
+  echo -e "\tinit <aws_ak> <aws_sk> <region>: prepares a new cooker\n\tenvironment in current path, using the user's AK/SK\n\tand region as default\n"
+  echo -e "\tcook <recipes_path> [ak=<aws_ak>] [sk=<aws_ak>] [region=<region>] [ami=<ami>] [-lastami]:\n\tstarts to build Appliance Image with packer recipe.\n"
+  echo -e "\tlist: Lists currently available, buildable appliances.\n"
+  echo -e "\tupdate: Updates current cooker directory with the last\n\trecipes versions.\n"
+}
+
+function init() {
+
+  if [[ $# < 3 ]]; then
+    echo "error: please supply required args. Type [$0 help] to get help"
+    exit 1
+  fi
+
+  if [ ! -d ~/.cooker ]; then
+    mkdir -p ~/.cooker
+  fi
+
+  user_ak=$1
+  user_sk=$2
+  default_region=$3
+
+  mkdir cooker-recipes
+  git clone http://github.com/outscale/cooker-recipes cooker-recipes/
+  echo $user_ak > ~/.cooker/config
+  echo $user_sk >> ~/.cooker/config
+  echo $default_region >> ~/.cooker/config
+  update
+}
+
+function update() {
+
+  testenv
+  cd cooker-recipes && git pull && cd ..
+}
+
+
+function cook() {
+
+  if [[ $# < 1 ]]; then
+    echo "error: please supply a recipe name. Type [$0 help] to get help"
+    exit 1
+  fi
+
+  if [ ! -e cooker-recipes/appliances/$1/template ]; then
+    echo "error: this recipe does not exist."
+    exit 1
+  fi
+
+  testenv
+
+  # default values
+  ak=`head -n1 ~/.cooker/config`
+  sk=`sed -n '2p' ~/.cooker/config | sed 's#/#\\\\/#g'`
+  region=`tail -n1 ~/.cooker/config`
+  if [ -f ./cooker-recipes/appliances/$1/../sourceami ]; then
+    source_ami=`cat ./cooker-recipes/appliances/$1/../sourceami`
+  else
+    source_ami="[[SOURCE_AMI]]"
+  fi
+
+  for arg in $@ ; do
+    if [[ $arg == ak=* ]]; then
+      ak=${arg:3}
+    elif [[ $arg == sk=* ]]; then
+      sk=${arg:3}
+    elif [[ $arg == region=* ]]; then
+      region=${arg:7}
+    elif [[ $arg == ami=* ]]; then
+      source_ami=${arg:4}
+    elif [[ $arg == -lastami* ]]; then
+      source_ami=`cat ~/.cooker/lastami| tr -d ' '`
+    fi
+
+  done
+
+  cdate=`date +'%Y%m%d%H%M'`
+  recipe_clean_name=`echo $1| tr '/' '-'`
+  tmp_dir=/tmp/cooker_${cdate}_${recipe_clean_name}_${RANDOM}
+  working_dir=`pwd`
+
+  cp -r cooker-recipes/appliances/$1 ${tmp_dir}/
+  cp -r cooker-recipes/scripts ${tmp_dir}
+  cd ${tmp_dir}
+
+  sed -i "s/\[\[AWS_AK\]\]/$ak/" template
+  sed -i "s/\[\[AWS_SK\]\]/$sk/" template
+  sed -i "s/\[\[SOURCE_AMI\]\]/$source_ami/" template
+  sed -i "s/\[\[REGION\]\]/$region/" template
+
+  packer build template |tee ${tmp_dir}/output
+  tail -n1 ${tmp_dir}/output| grep 'ami-'|cut -d':' -f2|tr -d ' ' > ~/.cooker/lastami
+
+  #rm -rf ${tmp_dir}
+  cd ${working_dir}
+
+}
+
+function list() {
+  testenv
+  find -L cooker-recipes/appliances -type d | sed 's#cooker-recipes/appliances/##' | grep -v cooker-recipes/appliances | grep '/' | grep -v '.*/.*/.*$'
+}
+
+function testenv() {
+
+  if [ ! -d cooker-recipes ]; then
+    echo "error: a cooker-recipes environment was not found in current directory."
+    exit 1
+  fi
+
+}
+
+if [ $# -lt 1 ]; then
+    usage
+    exit 1
+fi
+
+
+case $1 in
+
+   init)
+     shift
+     init $@
+   ;;
+
+   cook)
+     shift
+     cook $@
+   ;;
+
+   list)
+     list
+   ;;
+
+   update)
+     update
+   ;;
+
+   *)
+     usage
+   ;;
+
+esac
+
